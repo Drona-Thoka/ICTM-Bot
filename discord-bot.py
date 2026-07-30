@@ -3,14 +3,7 @@ import discord
 from discord import app_commands
 import aiohttp
 from dotenv import load_dotenv
-from io import BytesIO
 import asyncio
-import re
-
-# ---------- Matplotlib with LaTeX ----------
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
-import matplotlib.pyplot as plt
 
 load_dotenv()
 
@@ -31,40 +24,7 @@ class BotClient(discord.Client):
 
 client = BotClient()
 
-# ---------- Helpers ----------
-def clean_latex(text: str) -> str:
-    """Clean up common OCR mistakes and escape #."""
-    text = text.replace(r'\texbf', r'\textbf')
-    text = text.replace(r'\texit', r'\textit')
-    text = text.replace('#', r'\#')      # escape # for LaTeX
-    text = text.replace(': :', ':')
-    return text
-
-async def render_latex_local(latex_str: str) -> BytesIO:
-    """Render LaTeX to PNG using matplotlib (local)."""
-    latex_str = clean_latex(latex_str)
-    fig, ax = plt.subplots(figsize=(12, 8))
-    ax.axis('off')
-    plt.rc('text', usetex=True)
-    plt.rc('font', family='serif')
-    # Wrap in displaymath for proper rendering
-    tex = f"\\begin{{displaymath}}\n{latex_str}\n\\end{{displaymath}}"
-    ax.text(0.5, 0.5, tex, size=16, ha='center', va='center', transform=ax.transAxes)
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.5, dpi=150)
-    plt.close(fig)
-    buf.seek(0)
-    return buf
-
-async def render_latex(latex_str: str) -> BytesIO:
-    """Try local render; if fails, fall back to raw text (no image)."""
-    try:
-        return await render_latex_local(latex_str)
-    except Exception as e:
-        print(f"Local LaTeX render failed: {e}")
-        # Raise so the command can fall back to raw text
-        raise
-
+# ---------- API helpers ----------
 async def api_get(endpoint, params=None):
     async with aiohttp.ClientSession() as session:
         url = f"{API_BASE}{endpoint}"
@@ -73,9 +33,7 @@ async def api_get(endpoint, params=None):
                 if resp.status == 200:
                     return await resp.json()
                 return None
-        except asyncio.TimeoutError:
-            return None
-        except Exception:
+        except (asyncio.TimeoutError, Exception):
             return None
 
 async def api_post(endpoint, data=None):
@@ -86,9 +44,7 @@ async def api_post(endpoint, data=None):
                 if resp.status in (200, 201):
                     return await resp.json()
                 return None
-        except asyncio.TimeoutError:
-            return None
-        except Exception:
+        except (asyncio.TimeoutError, Exception):
             return None
 
 # ---------- Commands ----------
@@ -117,28 +73,22 @@ async def practice(interaction: discord.Interaction, competition: str, topic: st
 
     user_problems[interaction.user.id] = data["problem_id"]
 
-    # Build LaTeX string
+    # Build a clean text version
     lines = []
-    lines.append(f"\\textbf{{{data['competition_name']} - Problem {data['problem_id']}}}")
+    lines.append(f"**{data['competition_name']} - Problem {data['problem_id']}**")
     lines.append("")  # blank line
     lines.append(data['problem_text'])
     if data.get('choices'):
-        lines.append("")  # blank line
-        lines.append("\\textbf{Choices:}")
+        lines.append("")
+        lines.append("**Choices:**")
         for letter, value in data['choices'].items():
             lines.append(f"{letter}: {value}")
-    latex_str = "\n".join(lines)
 
-    try:
-        img_buf = await render_latex(latex_str)
-        file = discord.File(img_buf, filename="problem.png")
-        await interaction.followup.send(file=file)
-        await interaction.followup.send("Type `/answer YOUR_ANSWER` to check.")
-    except Exception as e:
-        # Fallback: send raw LaTeX in a code block
-        await interaction.followup.send(
-            f"⚠️ **Could not render image.** Here's the raw problem:\n```latex\n{latex_str}\n```"
-        )
+    problem_text = "\n".join(lines)
+
+    # Send as a code block (monospace, readable)
+    await interaction.followup.send(f"```latex\n{problem_text}\n```")
+    await interaction.followup.send("Type `/answer YOUR_ANSWER` to check.")
 
 @client.tree.command(name="answer", description="Check your answer for the current problem")
 @app_commands.describe(answer="Your answer (e.g., 42, A, or 3/4)")
